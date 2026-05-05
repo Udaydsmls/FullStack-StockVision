@@ -1,158 +1,142 @@
-# 📈 FullStack StockVision – AI-powered full-stack stock prediction & visualization
+# StockVision
 
-A simple end-to-end project combining **Data Science (Python, TensorFlow)**, **C++ (ONNX Runtime for inference)**, and a **React frontend**.
+A full-stack stock-forecasting project: a Python training pipeline, a C++
+inference server, and a React UI. Works for any ticker that yfinance can
+return, and ships with seven model architectures.
 
-- **Python**: Fetch stock data, train LSTM, export to ONNX
-- **C++**: Serve predictions over HTTP
-- **React**: User interface to query predictions
-
----
-
-## 🚀 Features
-
-- Fetches live stock data using [yfinance](https://pypi.org/project/yfinance/)
-- Trains a simple **LSTM model** for next-day price prediction
-- Exports model to **ONNX** for fast inference in C++
-- C++ HTTP server serves predictions at `/predict` endpoint
-- React frontend queries the server and displays predictions
-
----
-
-## 🗂 Project Structure
+## Layout
 
 ```
-stock-predictor/
-├── ingest_train/       # Python data + training
-│   ├── fetch_and_save.py
-│   ├── train_export.py
-│   └── model/          # saved ONNX models
-├── cpp_server/         # C++ inference server
-│   ├── main.cpp
-│   ├── CMakeLists.txt
-│   └── Simple-Web-Server/
-├── frontend/           # React frontend
-│   ├── src/
-│   │   └── App.js
-│   └── public/
-└── README.md
+FullStack-StockVision/
+├── ingest_train/          # Python package (data, features, training, API, CLI)
+├── cpp_server/            # C++ HTTP inference server
+├── frontend/              # React + Tailwind UI
+└── testing models/        # Exploratory notebooks
 ```
 
----
+## Quick start
 
-## ⚙️ Setup & Usage
-
-### 1. Python (Data + Training)
+### 1. Train a model
 
 ```bash
 cd ingest_train
-python3 -m venv venv
-source venv/bin/activate
-pip install yfinance pandas tensorflow tf2onnx
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e .[dev]
 
-# Fetch stock data
-python fetch_and_save.py AAPL data/AAPL.csv
-
-# Train model and export to ONNX
-python train_export.py data/AAPL.csv 10 model/lstm.onnx
+stockvision fetch AAPL
+stockvision train AAPL --model lstm
+stockvision train MSFT --model transformer
 ```
 
----
+Each train command writes:
 
-### 2. C++ Server (Inference API)
+```
+ingest_train/artifacts/<TICKER>/<MODEL>/
+├── model.onnx
+├── scaler.joblib
+├── metadata.json
+└── params.txt          # consumed by the C++ server
+```
+
+### 2. Serve predictions
+
+Python service:
+
+```bash
+stockvision serve --port 8000
+```
+
+C++ server (after `stockvision train`):
 
 ```bash
 cd cpp_server
-mkdir build && cd build
-cmake ..
-make
-
-# Run server
-./stock_server ../AAPL.csv 60 8080
+cmake -S . -B build -DONNXRUNTIME_ROOT=/path/to/onnxruntime
+cmake --build build --config Release
+./build/stock_server --port 8080 --artifacts-dir ../ingest_train/artifacts
 ```
 
-Server runs at:  
-`http://localhost:8080/predict?ticker=AAPL`
-
----
-
-### 3. React Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
+cp .env.example .env       # set REACT_APP_API_URL
 npm install
 npm start
 ```
 
-Frontend runs at:  
-`http://localhost:3000`
+## REST API
 
----
+Both servers expose the same endpoints.
 
-## 🎨 Frontend Preview
+| Method | Path        | Query                       | Description             |
+| ------ | ----------- | --------------------------- | ----------------------- |
+| GET    | `/health`   | -                           | Liveness + model list.  |
+| GET    | `/history`  | `ticker`, `days`            | Recent close prices.    |
+| GET    | `/predict`  | `ticker`, `model`, `days`   | Next-step forecast.     |
 
-![Frontend Screenshot](imgs/frontend_img.png)
+Sample response:
 
----
+```json
+{
+  "ticker": "AAPL",
+  "model": "transformer",
+  "prediction": 195.42,
+  "last_close": 193.18,
+  "history": [188.10, 189.05],
+  "history_dates": ["2025-04-01", "2025-04-02"]
+}
+```
 
-## 📌 Roadmap
+## Models
 
-- [ ] Add support for multiple tickers dynamically
-- [ ] Improve model accuracy with more features (volume, indicators)
-- [ ] Deploy via Docker
+| Name          | Notes                                                      |
+| ------------- | ---------------------------------------------------------- |
+| `lstm`        | Two-layer LSTM with dropout.                               |
+| `bilstm`      | Bidirectional LSTM stack.                                  |
+| `gru`         | GRU regressor; faster than LSTM.                           |
+| `cnn_lstm`    | 1-D CNN front-end into an LSTM head.                       |
+| `transformer` | Encoder-only Transformer with multi-head self-attention.   |
+| `tcn`         | Dilated causal convolutions with residual connections.     |
+| `linear`      | Flattened linear baseline.                                 |
 
----
+To add a new architecture, drop a class under `stockvision/models/` and
+decorate it with `@register_model("name")`. The CLI, API, and UI dropdown
+pick it up automatically.
 
-# 🧪 Testing Different Models for Stock Prediction
+## Configuration
 
-Implementing different **ML models** to predict stocks.  
-For this experiment, I used data from Yahoo Finance for **TATA MOTORS**.
+| Variable                     | Default        | Purpose                            |
+| ---------------------------- | -------------- | ---------------------------------- |
+| `STOCKVISION_PERIOD`         | `2y`           | yfinance lookback window.          |
+| `STOCKVISION_INTERVAL`       | `1d`           | yfinance bar interval.             |
+| `STOCKVISION_WINDOW`         | `30`           | Sliding window length.             |
+| `STOCKVISION_EPOCHS`         | `25`           | Training epochs.                   |
+| `STOCKVISION_BATCH_SIZE`     | `32`           | Mini-batch size.                   |
+| `STOCKVISION_HOST` / `_PORT` | `0.0.0.0:8000` | FastAPI bind address.              |
+| `STOCKVISION_DEFAULT_MODEL`  | `lstm`         | Fallback model.                    |
 
-## 📊 Results from `Stock_Prediction.ipynb`
+The C++ server takes the same options as CLI flags; see
+`cpp_server/README.md`.
 
-### 🔹 RNN using LSTM:
+## Tests
 
-![image](https://github.com/user-attachments/assets/52b59d97-7d9e-4e5e-9619-a85f96182097)  
-The graph may not look very impressive, but with a higher range of data and better optimizations, the model can perform much better.
+```bash
+# Python
+cd ingest_train && pytest
 
-### 🔹 Linear Regression:
+# C++
+cd cpp_server
+cmake -S . -B build -DSTOCKVISION_BUILD_TESTS=ON -DONNXRUNTIME_ROOT=/path
+cmake --build build && ctest --test-dir build
+```
 
-![image](https://github.com/user-attachments/assets/39c79f15-097d-4ee9-98c0-ee7c150a29e3)  
-The results in this case are quite impressive; however, this might be because the model is not predicting that far into the future, which makes it uncertain how well it will perform in practice.
+## Notebooks
 
-### 🔹 ARIMA:
+`testing models/` holds the original notebooks comparing LSTM, ARIMA,
+gradient boosting, and linear regression on TATA MOTORS data. Production
+training and inference use `ingest_train/`.
 
-![image](https://github.com/user-attachments/assets/557a88d2-9b56-4491-a0bf-1c1c7e601214)  
-In ARIMA, you get an interval within which the future value is expected to lie.
+## License
 
----
-
-## 📊 Results from `Stock_Prediction_Diff_Parameters.ipynb`
-
-To further improve the model, I tried adding some benchmarks, such as 'NIFTY'.
-
-### 🔹 Gradient Boosting:
-
-![image](https://github.com/user-attachments/assets/6add268a-9f34-4a1e-8a11-caaa9e4a04f6)
-
-### 🔹 Linear Regression with more parameters:
-
-![image](https://github.com/user-attachments/assets/fdc99ef7-bd1f-49c7-ba87-ce68ab47d10a)  
-This is nearly the same as the previous one, with no visible improvements.
-
----
-
-## ✅ Conclusion
-
-1. **RNN (LSTM):** Suited for **medium-term stock purchases**. With optimizations or longer data ranges, it can perform much better.
-2. **Linear Regression:** Very strong for **short-term predictions**, but uncertain for long-term performance.
-3. **ARIMA:** Provides an **interval** for future prices, useful for long-term investment strategies.
-4. **Gradient Boosting:** Decent for **medium time frames**, but not optimal for very short-term predictions.
-
----
-
-## 🔮 Future Work
-
-1. Study seasonal effects on the stock market.
-2. Perform **sentiment analysis** to see how news and social media affect stock prices.
-3. Examine macroeconomic factors (US bond rates, gold prices, etc.).
-4. Explore technical indicators like **RSI** and **EMA** to enhance predictions.
+MIT. See `LICENSE`.

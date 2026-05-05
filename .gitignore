@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data and artifacts
+ingest_train/data/*.csv
+ingest_train/artifacts/
+!ingest_train/data/.gitkeep
+
+# Node / React
+node_modules/
+.npm/
+frontend/build/
+frontend/.env
+frontend/.env.local
+
+# C++ / CMake
+cpp_server/build/
+cpp_server/cmake-build-*/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+.claude/
+
+# Logs
+*.log
+logs/

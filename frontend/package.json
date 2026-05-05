@@ -1,9 +1,8 @@
 {
-  "name": "stock-predictor",
-  "version": "1.0.0",
+  "name": "stockvision-frontend",
+  "version": "0.2.0",
   "private": true,
   "dependencies": {
-    "@heroicons/react": "2.0.18",
     "chart.js": "^4.5.0",
     "react": "18.2.0",
     "react-chartjs-2": "^5.3.0",
@@ -18,8 +17,13 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "test": "react-scripts test",
+    "test": "react-scripts test --watchAll=false",
     "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app"
+    ]
   },
   "browserslist": {
     "production": [
