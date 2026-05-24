@@ -1,0 +1,4 @@
+outs:
+- path: artifacts
+  hash: md5
+  desc: Per-(ticker, model) trained artefacts (model.onnx, scaler.joblib, metadata.json, params.txt).

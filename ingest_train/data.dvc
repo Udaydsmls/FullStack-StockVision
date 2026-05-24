@@ -1,0 +1,4 @@
+outs:
+- path: data
+  hash: md5
+  desc: Cached OHLCV CSV files keyed by ticker, fetched by `stockvision fetch`.

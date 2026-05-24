@@ -15,10 +15,9 @@ env/
 .coverage
 htmlcov/
 
-# Data and artifacts
-ingest_train/data/*.csv
-ingest_train/artifacts/
-!ingest_train/data/.gitkeep
+# Data and artifacts (DVC-tracked; pointer .dvc files are committed)
+/ingest_train/data
+/ingest_train/artifacts
 
 # Node / React
 node_modules/
@@ -48,3 +47,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Experiment tracking
+mlruns/
+wandb/
+mlartifacts/

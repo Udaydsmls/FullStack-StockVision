@@ -38,6 +38,8 @@ export const api = {
   health: () => request("/health"),
   history: (ticker, days) => request("/history", { ticker, days }),
   predict: (ticker, model, days) => request("/predict", { ticker, model, days }),
+  predictTriton: (ticker, model, days) => request("/predict/triton", { ticker, model, days }),
+  explain: (ticker, model) => request("/explain", { ticker, model }),
 };
 
 export { ApiError, BASE_URL };

@@ -12,6 +12,7 @@ from .data import DataFetchError, MarketDataRepository
 from .inference import PredictionService
 from .logging_setup import configure_logging, get_logger
 from .models import available_models
+from .triton import TritonInferenceClient, TritonUnavailable
 
 log = get_logger(__name__)
 
@@ -34,6 +35,14 @@ class HistoryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     models: List[str]
+
+
+class ExplainResponse(BaseModel):
+    ticker: str
+    model: str
+    prediction: float
+    base_value: float
+    shap_values: dict
 
 
 @lru_cache(maxsize=1)
@@ -71,6 +80,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return HistoryResponse(**payload)
 
+    triton_client = TritonInferenceClient()
+
     @app.get("/predict", response_model=PredictionResponse)
     def predict(
         ticker: str = Query(..., min_length=1, max_length=10),
@@ -96,6 +107,49 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             history=result.history,
             history_dates=result.history_dates,
         )
+
+    @app.get("/explain", response_model=ExplainResponse)
+    def explain(
+        ticker: str = Query(..., min_length=1, max_length=10),
+        model: str = Query(default=cfg.service.default_model),
+    ) -> ExplainResponse:
+        if model not in available_models():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model '{model}'. Available: {available_models()}",
+            )
+        try:
+            from explainer import StockVisionExplainer
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try:
+            result = StockVisionExplainer(service).explain(ticker, model)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DataFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return ExplainResponse(**result.to_dict())
+
+    @app.get("/predict/triton", response_model=PredictionResponse)
+    def predict_triton(
+        ticker: str = Query(..., min_length=1, max_length=10),
+        model: str = Query(default=cfg.service.default_model),
+        days: int = Query(60, ge=5, le=720),
+    ) -> PredictionResponse:
+        if model not in available_models():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model '{model}'. Available: {available_models()}",
+            )
+        try:
+            result = triton_client.predict(service, ticker, model, history_size=days)
+        except TritonUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DataFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return PredictionResponse(**result)
 
     return app
 
