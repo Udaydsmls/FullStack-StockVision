@@ -204,8 +204,8 @@ cmake --build build && ctest --test-dir build
 ## Notebooks
 
 `testing models/` holds the original notebooks comparing LSTM, ARIMA,
-gradient boosting, and linear regression on TATA MOTORS data. Production
-training and inference use `ingest_train/`.
+gradient boosting, and linear regression on sample equity price data.
+Production training and inference use `ingest_train/`.
 
 ## License
 
