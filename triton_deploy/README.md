@@ -1,7 +1,7 @@
-# Triton Inference Server Deployment
+# Triton Inference Server
 
-A third serving option alongside the FastAPI service and the C++ server.
-Triton consumes the same ONNX files produced by `stockvision train`.
+The third serving backend. Triton runs the same ONNX files that
+`stockvision train` produced for FastAPI and the C++ server.
 
 ## Workflow
 
@@ -12,29 +12,33 @@ stockvision train AAPL --model lstm
 
 # 2. Lay out the Triton model repository
 cd ../triton_deploy
-python setup_triton_repo.py \
-    --artifacts ../ingest_train/artifacts \
-    --output model_repository
+python setup_triton_repo.py --artifacts ../ingest_train/artifacts
 
-# 3. Boot the Triton container
+# 3. Start Triton
 docker compose -f docker-compose.triton.yml up
-
-# 4. Send a request
-python triton_client.py --ticker AAPL --model lstm
 ```
 
-The FastAPI service also exposes `GET /predict/triton?ticker=...&model=...`
-which calls Triton on `localhost:8001`.
+`setup_triton_repo.py` reads each `metadata.json` so the generated
+`config.pbtxt` uses the tensor names and shapes the exported graph actually
+has.
+
+Requests go through the FastAPI service, which scales the features locally and
+forwards the tensor:
+
+```
+GET http://localhost:8000/predict/triton?ticker=AAPL&model=lstm
+```
+
+Set `TRITON_URL` if Triton is not on `localhost:8000`.
 
 ## Layout
 
 ```
 triton_deploy/
-├── model_repository/
-│   └── <model_name>/
+├── model_repository/          # generated
+│   └── <ticker>_<model>/
 │       ├── 1/model.onnx
 │       └── config.pbtxt
 ├── setup_triton_repo.py
-├── triton_client.py
 └── docker-compose.triton.yml
 ```

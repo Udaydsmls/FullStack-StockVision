@@ -1,9 +1,9 @@
-# StockVision Python Package
+# StockVision Python package
 
-Data ingestion, feature engineering, training, ONNX export, and a FastAPI
-inference service.
+Data ingestion, feature engineering, training, ONNX export, and the FastAPI
+serving backend.
 
-## Installation
+## Install
 
 ```bash
 cd ingest_train
@@ -12,70 +12,58 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e .[dev]
 ```
 
-## Command-line interface
+## Modules
 
-The package installs a `stockvision` console script with the following
-subcommands.
+| File            | Purpose                                                        |
+| --------------- | -------------------------------------------------------------- |
+| `config.py`     | Every setting, with environment-variable overrides.            |
+| `data.py`       | yfinance download plus a CSV cache.                            |
+| `features.py`   | Technical indicators; the C++ server mirrors these.            |
+| `dataset.py`    | Chronological split, scaling, and sliding windows.             |
+| `models/`       | The plugin registry and the nine architectures.                |
+| `trainer.py`    | Train, evaluate, export to ONNX, write `params.txt`.           |
+| `tracking.py`   | MLflow logging for each run.                                   |
+| `inference.py`  | Load artifacts and serve forecasts.                            |
+| `triton.py`     | Same forecast, executed inside Triton.                         |
+| `explain.py`    | SHAP feature attributions for one prediction.                  |
+| `api.py`        | FastAPI routes.                                                |
+| `sweep.py`      | Weights & Biases Bayesian sweep.                               |
+| `cli.py`        | The `stockvision` command.                                     |
 
-| Command                               | Purpose                                                         |
-| ------------------------------------- | --------------------------------------------------------------- |
-| `stockvision models`                  | List the registered model architectures.                        |
-| `stockvision fetch TICKER`            | Download OHLCV data into the local cache.                       |
-| `stockvision train TICKER --model X`  | Train a model and export it to ONNX.                            |
-| `stockvision predict TICKER --model X`| Run a one-shot inference against a trained model.               |
-| `stockvision serve`                   | Launch the FastAPI service (default: `http://0.0.0.0:8000`).    |
-
-Examples:
+## Commands
 
 ```bash
+stockvision models
 stockvision fetch AAPL
 stockvision train AAPL --model transformer
 stockvision predict AAPL --model transformer
 stockvision serve --port 8000
+stockvision sweep --count 20
 ```
 
-## Available architectures
+## Adding an architecture
 
-| Name          | Description                                                            |
-| ------------- | ---------------------------------------------------------------------- |
-| `lstm`        | Stacked LSTM with dropout.                                             |
-| `bilstm`      | Bidirectional LSTM stack.                                              |
-| `gru`         | Stacked GRU; faster than LSTM.                                         |
-| `cnn_lstm`    | 1-D convolution front-end into an LSTM.                                |
-| `transformer` | Encoder-only Transformer with multi-head self-attention.               |
-| `tcn`         | Temporal Convolutional Network with dilated causal convolutions.       |
-| `linear`      | Flattened linear baseline.                                             |
+Create one file under `stockvision/models/` and call `register(...)`. The
+package imports every module in that folder on load, so nothing else needs to
+change:
 
-Add a new architecture by subclassing `BaseForecastModel` and decorating it
-with `@register_model("name")` inside `stockvision/models/`. The registry is
-imported automatically on package load.
+```python
+from .registry import register
 
-## HTTP endpoints
 
-| Method | Path        | Description                                                        |
-| ------ | ----------- | ------------------------------------------------------------------ |
-| `GET`  | `/health`   | Returns service status and the registered model names.             |
-| `GET`  | `/history`  | `?ticker=AAPL&days=60` — recent close prices.                      |
-| `GET`  | `/predict`  | `?ticker=AAPL&model=lstm&days=60` — next-step forecast + history.  |
+def build(window, num_features):
+    import tensorflow as tf
+    return tf.keras.Sequential([...], name="my_model")
 
-## Configuration
 
-Configuration is loaded from `stockvision.config.AppConfig` and can be
-overridden via environment variables:
+register("my_model", "What it does.", build=build)
+```
 
-| Variable                       | Default | Description                                  |
-| ------------------------------ | ------- | -------------------------------------------- |
-| `STOCKVISION_PERIOD`           | `2y`    | yfinance lookback period.                    |
-| `STOCKVISION_INTERVAL`         | `1d`    | yfinance bar interval.                       |
-| `STOCKVISION_WINDOW`           | `30`    | Sliding-window length (rows).                |
-| `STOCKVISION_EPOCHS`           | `25`    | Training epochs.                             |
-| `STOCKVISION_BATCH_SIZE`       | `32`    | Mini-batch size.                             |
-| `STOCKVISION_HOST` / `_PORT`   | `0.0.0.0:8000` | API bind address.                     |
-| `STOCKVISION_LOG_LEVEL`        | `info`  | Log level for the CLI and the API service.   |
-| `STOCKVISION_DEFAULT_MODEL`    | `lstm`  | Fallback model when none is requested.       |
+Classical models pass `fit=` and `predict_next=` instead of `build=`; see
+`prophet_model.py`.
 
 ## Tests
 
 ```bash
-pytest -q
+pytest
 ```

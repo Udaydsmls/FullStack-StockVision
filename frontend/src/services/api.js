@@ -1,45 +1,59 @@
-const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+// All three backends answer the same paths with the same JSON, so switching
+// between them only means switching the base URL.
+export const BACKENDS = [
+  {
+    id: "fastapi",
+    label: "FastAPI",
+    url: process.env.REACT_APP_FASTAPI_URL || "http://localhost:8000",
+    predictPath: "/predict",
+  },
+  {
+    id: "cpp",
+    label: "C++ / ONNX Runtime",
+    url: process.env.REACT_APP_CPP_URL || "http://localhost:8080",
+    predictPath: "/predict",
+  },
+  {
+    id: "triton",
+    label: "Triton",
+    // Triton is reached through the FastAPI service, which forwards the tensor.
+    url: process.env.REACT_APP_TRITON_URL || "http://localhost:8000",
+    predictPath: "/predict/triton",
+  },
+];
 
-class ApiError extends Error {
-  constructor(message, status) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
+const HISTORY_DAYS = Number(process.env.REACT_APP_HISTORY_DAYS || 60);
+
+export function findBackend(id) {
+  return BACKENDS.find((backend) => backend.id === id) || BACKENDS[0];
 }
 
-async function request(path, params = {}) {
-  const url = new URL(path, BASE_URL);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== "") url.searchParams.append(k, v);
-  });
+async function get(baseUrl, path, params = {}) {
+  const url = new URL(path, baseUrl);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.append(key, value));
 
   let response;
   try {
-    response = await fetch(url.toString(), { method: "GET" });
-  } catch (e) {
-    throw new ApiError(`Network error: ${e.message}`, 0);
+    response = await fetch(url.toString());
+  } catch (error) {
+    throw new Error(`Could not reach ${baseUrl}`);
   }
 
+  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = body.detail || body.error || detail;
-    } catch {
-      // ignore non-JSON error bodies
-    }
-    throw new ApiError(detail, response.status);
+    throw new Error(body.detail || body.error || response.statusText);
   }
-  return response.json();
+  return body;
 }
 
 export const api = {
-  health: () => request("/health"),
-  history: (ticker, days) => request("/history", { ticker, days }),
-  predict: (ticker, model, days) => request("/predict", { ticker, model, days }),
-  predictTriton: (ticker, model, days) => request("/predict/triton", { ticker, model, days }),
-  explain: (ticker, model) => request("/explain", { ticker, model }),
-};
+  health: (backendId) => get(findBackend(backendId).url, "/health"),
 
-export { ApiError, BASE_URL };
+  predict: (backendId, ticker, model, days = HISTORY_DAYS) => {
+    const backend = findBackend(backendId);
+    return get(backend.url, backend.predictPath, { ticker, model, days });
+  },
+
+  // SHAP runs inside the Python service, so explanations always come from FastAPI.
+  explain: (ticker, model) => get(findBackend("fastapi").url, "/explain", { ticker, model }),
+};

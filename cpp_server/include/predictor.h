@@ -1,70 +1,50 @@
 #pragma once
 
+#include <onnxruntime_cxx_api.h>
+
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "feature_engineer.h"
-
-namespace Ort { class Env; class Session; class MemoryInfo; }
+#include "features.h"
 
 namespace stockvision {
 
-struct PredictionInput {
-    std::string ticker;
-    std::string model;
-};
-
-struct PredictionOutput {
-    float prediction;
-    float last_close;
-    std::vector<float> history;
-    std::vector<std::string> history_dates;
-    std::string ticker;
-    std::string model;
-};
-
-struct ModelArtifact {
-    int window;
-    int num_features;
+// Everything params.txt records about one exported model, plus its ONNX session.
+struct Model {
+    int window = 0;
+    int num_features = 0;
     std::vector<std::string> feature_names;
     std::vector<float> feature_mean;
     std::vector<float> feature_scale;
-    float target_mean;
-    float target_scale;
-    std::string input_name;
-    std::string output_name;
+    float target_mean = 0.0f;
+    float target_scale = 1.0f;
+    std::string input_name = "input";
+    std::string output_name = "output";
     std::unique_ptr<Ort::Session> session;
 };
 
 class Predictor {
 public:
-    explicit Predictor(std::filesystem::path artifacts_dir);
-    ~Predictor();
+    explicit Predictor(std::filesystem::path artifacts_dir)
+        : artifacts_dir_(std::move(artifacts_dir)) {}
 
-    Predictor(const Predictor&) = delete;
-    Predictor& operator=(const Predictor&) = delete;
-
-    PredictionOutput predict(const PredictionInput& input,
-                             const FeatureMatrix& features,
-                             const std::vector<float>& closes,
-                             const std::vector<std::string>& dates,
-                             int history_size);
+    // Scales the last `window` rows, runs the model, and returns the next close in dollars.
+    float predict(const std::string& ticker, const std::string& model_name,
+                  const FeatureMatrix& features);
 
 private:
-    using Key = std::pair<std::string, std::string>;
-    struct KeyHash { std::size_t operator()(const Key& k) const noexcept; };
-
-    ModelArtifact* load(const std::string& ticker, const std::string& model);
+    const Model& load(const std::string& ticker, const std::string& model_name);
 
     std::filesystem::path artifacts_dir_;
-    std::unique_ptr<Ort::Env> env_;
-    std::unique_ptr<Ort::MemoryInfo> memory_info_;
-    std::unordered_map<Key, std::unique_ptr<ModelArtifact>, KeyHash> cache_;
-    std::mutex mu_;
+    Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "stockvision"};
+    Ort::MemoryInfo memory_info_ = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::map<std::string, Model> models_;  // keyed by "AAPL/lstm"
+    std::mutex mutex_;
 };
 
 }  // namespace stockvision

@@ -1,7 +1,6 @@
-program: sweep_agent.py
 method: bayes
 metric:
-  name: val_mae
+  name: mae
   goal: minimize
 parameters:
   ticker:

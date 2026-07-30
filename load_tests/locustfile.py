@@ -1,52 +1,40 @@
-"""Locust users hammering each of the three serving backends in parallel."""
-
-from __future__ import annotations
+"""Load test that hits all three serving backends at the same time."""
 
 import os
 import random
 
 from locust import HttpUser, between, task
 
-TICKERS = os.environ.get("LOADTEST_TICKERS", "AAPL,MSFT,TSLA,NVDA,GOOG").split(",")
-MODELS = os.environ.get("LOADTEST_MODELS", "lstm,gru,transformer").split(",")
+TICKERS = os.getenv("LOADTEST_TICKERS", "AAPL,MSFT,TSLA,NVDA,GOOG").split(",")
+MODELS = os.getenv("LOADTEST_MODELS", "lstm,gru,transformer").split(",")
 
 
-def _params() -> dict[str, str]:
-    return {
-        "ticker": random.choice(TICKERS),
-        "model": random.choice(MODELS),
-        "days": "60",
-    }
+class BackendUser(HttpUser):
+    """Shared behaviour. Each subclass below points at one backend."""
 
-
-class FastAPIUser(HttpUser):
-    """Targets the Python FastAPI service on :8000."""
-
-    host = os.environ.get("LOADTEST_FASTAPI", "http://localhost:8000")
+    abstract = True
     wait_time = between(0.1, 0.5)
+    path = "/predict"
+    backend = "backend"
 
     @task
-    def predict(self) -> None:
-        self.client.get("/predict", params=_params(), name="fastapi:/predict")
+    def predict(self):
+        params = {"ticker": random.choice(TICKERS), "model": random.choice(MODELS), "days": 60}
+        # The name is what shows up as a row in the Locust stats CSV.
+        self.client.get(self.path, params=params, name=f"{self.backend}:/predict")
 
 
-class CppServerUser(HttpUser):
-    """Targets the hand-rolled C++ server on :8080."""
-
-    host = os.environ.get("LOADTEST_CPP", "http://localhost:8080")
-    wait_time = between(0.1, 0.5)
-
-    @task
-    def predict(self) -> None:
-        self.client.get("/predict", params=_params(), name="cpp:/predict")
+class FastApiUser(BackendUser):
+    host = os.getenv("LOADTEST_FASTAPI", "http://localhost:8000")
+    backend = "fastapi"
 
 
-class TritonUser(HttpUser):
-    """Targets the FastAPI shim that proxies to Triton; tests Triton's HTTP path indirectly."""
+class CppUser(BackendUser):
+    host = os.getenv("LOADTEST_CPP", "http://localhost:8080")
+    backend = "cpp"
 
-    host = os.environ.get("LOADTEST_TRITON_PROXY", "http://localhost:8000")
-    wait_time = between(0.1, 0.5)
 
-    @task
-    def predict(self) -> None:
-        self.client.get("/predict/triton", params=_params(), name="triton:/predict")
+class TritonUser(BackendUser):
+    host = os.getenv("LOADTEST_TRITON", "http://localhost:8000")
+    path = "/predict/triton"
+    backend = "triton"

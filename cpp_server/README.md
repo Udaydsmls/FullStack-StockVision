@@ -1,17 +1,21 @@
-# StockVision C++ Inference Server
+# StockVision C++ inference server
 
-HTTP server that loads ONNX models exported by the Python pipeline and serves
-predictions for any ticker. Features are recomputed in C++ so there's no
-Python dependency at runtime.
+An HTTP server built directly on ONNX Runtime and a single-header HTTP library,
+with no web framework. It recomputes the technical indicators in C++, so there
+is no Python at runtime.
 
 ## Layout
 
 ```
 cpp_server/
-├── include/             # Public headers (csv_loader, feature_engineer, predictor, ...)
-├── src/                 # Implementation files
-├── tests/               # Compile-only unit tests
-└── CMakeLists.txt
+├── include/
+│   ├── csv_loader.h    # read the cached OHLCV CSVs
+│   ├── features.h      # the same 17 columns as stockvision/features.py
+│   ├── predictor.h     # ONNX Runtime sessions + the saved scaler
+│   ├── server.h        # settings + run_server()
+│   └── httplib.h       # third-party single-header HTTP library
+├── src/                # one .cpp per header, plus main.cpp for the CLI flags
+└── tests/
 ```
 
 ## Build
@@ -23,30 +27,32 @@ cmake -S . -B build \
 cmake --build build -j
 ```
 
-To compile the unit tests, add `-DSTOCKVISION_BUILD_TESTS=ON` and run
-`ctest --test-dir build`.
+Add `-DSTOCKVISION_BUILD_TESTS=ON` and run `ctest --test-dir build` for the
+CSV and feature tests. They do not need ONNX Runtime.
 
 ## Run
 
 ```bash
 ./build/stock_server \
-    --host 0.0.0.0 \
     --port 8080 \
     --artifacts-dir ../ingest_train/artifacts \
-    --default-model lstm
+    --data-dir ../ingest_train/data
 ```
 
-Set `STOCKVISION_DATA_DIR` to point to the directory of cached CSV files
-(default: sibling of `--artifacts-dir`, named `data/`).
+| Flag              | Default     | Purpose                                   |
+| ----------------- | ----------- | ----------------------------------------- |
+| `--host`          | `0.0.0.0`   | Bind address.                             |
+| `--port`          | `8080`      | Bind port.                                |
+| `--artifacts-dir` | `artifacts` | Where `stockvision train` wrote the ONNX. |
+| `--data-dir`      | `data`      | Where the cached CSVs live.               |
+| `--default-model` | `lstm`      | Used when a request omits `model`.        |
+| `--history-days`  | `60`        | How many closes to return.                |
 
 ## Endpoints
 
-| Method | Path        | Query                                    | Description                         |
-| ------ | ----------- | ---------------------------------------- | ----------------------------------- |
-| GET    | `/health`   | -                                        | Liveness probe.                     |
-| GET    | `/history`  | `ticker`, `days`                         | Returns recent close prices.        |
-| GET    | `/predict`  | `ticker`, `model`, `days`                | Returns the next-step prediction.   |
+`GET /health`, `GET /history?ticker=&days=`, and
+`GET /predict?ticker=&model=&days=` — the same paths and the same JSON as the
+FastAPI backend.
 
-The server expects the artefacts to live under
-`<artifacts-dir>/<TICKER>/<MODEL>/{model.onnx, params.txt}`. Both files are
-produced by `stockvision train`.
+The server reads `<artifacts-dir>/<TICKER>/<MODEL>/model.onnx` and the matching
+`params.txt`, both written by `stockvision train`.

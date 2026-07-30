@@ -1,8 +1,3 @@
-from importlib.metadata import PackageNotFoundError, version
+"""StockVision: data ingestion, model training, and a FastAPI serving backend."""
 
-try:
-    __version__ = version("stockvision")
-except PackageNotFoundError:
-    __version__ = "0.2.0"
-
-__all__ = ["__version__"]
+__version__ = "0.3.0"

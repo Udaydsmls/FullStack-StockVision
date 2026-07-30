@@ -2,23 +2,25 @@
 
 #include <filesystem>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace stockvision {
 
-struct OhlcvFrame {
+// One CSV of daily bars. Every vector holds one value per trading day.
+struct PriceTable {
     std::vector<std::string> dates;
-    std::unordered_map<std::string, std::vector<double>> columns;
+    std::vector<double> open;
+    std::vector<double> high;
+    std::vector<double> low;
+    std::vector<double> close;
+    std::vector<double> volume;
 
-    [[nodiscard]] std::size_t size() const {
-        if (columns.empty()) return 0;
-        return columns.begin()->second.size();
-    }
-
-    [[nodiscard]] const std::vector<double>& column(const std::string& name) const;
+    std::size_t size() const { return close.size(); }
 };
 
-OhlcvFrame load_ohlcv_csv(const std::filesystem::path& path);
+PriceTable read_csv(const std::filesystem::path& path);
+
+// Reads data_dir/<TICKER>.csv, the file `stockvision fetch` writes.
+PriceTable load_prices(const std::filesystem::path& data_dir, const std::string& ticker);
 
 }  // namespace stockvision

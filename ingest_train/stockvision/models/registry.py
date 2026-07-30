@@ -1,32 +1,32 @@
-from __future__ import annotations
+"""A small plugin registry so a new architecture is a one-file change."""
 
-from typing import Callable, Dict, List
-
-from .base import BaseForecastModel
-
-_REGISTRY: Dict[str, Callable[[], BaseForecastModel]] = {}
+MODELS = {}
 
 
-def register_model(name: str) -> Callable[[type[BaseForecastModel]], type[BaseForecastModel]]:
-    key = name.lower().strip()
+def register(name, description, backend="keras", build=None, fit=None, predict_next=None):
+    """Add one architecture to the registry.
 
-    def decorator(cls: type[BaseForecastModel]) -> type[BaseForecastModel]:
-        if key in _REGISTRY:
-            raise ValueError(f"Model already registered: {key}")
-        _REGISTRY[key] = cls  # type: ignore[assignment]
-        return cls
-
-    return decorator
-
-
-def get_model(name: str) -> BaseForecastModel:
-    key = name.lower().strip()
-    if key not in _REGISTRY:
-        raise KeyError(
-            f"Unknown model '{name}'. Available: {sorted(_REGISTRY.keys())}"
-        )
-    return _REGISTRY[key]()
+    Keras models pass ``build(window, num_features)`` and are exported to ONNX.
+    Classical models (Prophet, AutoARIMA) pass ``fit(df)`` and
+    ``predict_next(fitted, df)`` instead, and are pickled with joblib.
+    """
+    if name in MODELS:
+        raise ValueError(f"Model already registered: {name}")
+    MODELS[name] = {
+        "name": name,
+        "description": description,
+        "backend": backend,
+        "build": build,
+        "fit": fit,
+        "predict_next": predict_next,
+    }
 
 
-def available_models() -> List[str]:
-    return sorted(_REGISTRY.keys())
+def get_model(name):
+    if name not in MODELS:
+        raise KeyError(f"Unknown model '{name}'. Available: {available_models()}")
+    return MODELS[name]
+
+
+def available_models():
+    return sorted(MODELS)

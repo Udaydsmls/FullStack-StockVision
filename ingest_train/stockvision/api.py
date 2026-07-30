@@ -1,157 +1,84 @@
-from __future__ import annotations
+"""FastAPI backend.
 
-from functools import lru_cache
-from typing import List
+The C++ server and Triton answer the same paths with the same JSON, so the
+frontend can switch between all three without changing anything else.
+"""
+
+import logging
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
 
-from .config import AppConfig, load_config
-from .data import DataFetchError, MarketDataRepository
-from .inference import PredictionService
-from .logging_setup import configure_logging, get_logger
+from . import config, inference, triton
+from .data import DataFetchError
 from .models import available_models
-from .triton import TritonInferenceClient, TritonUnavailable
 
-log = get_logger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+app = FastAPI(title="StockVision API", version="0.3.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "OPTIONS"],
+    allow_headers=["*"],
+)
 
-class PredictionResponse(BaseModel):
-    ticker: str
-    model: str
-    prediction: float
-    last_close: float
-    history: List[float] = Field(default_factory=list)
-    history_dates: List[str] = Field(default_factory=list)
-
-
-class HistoryResponse(BaseModel):
-    ticker: str
-    history: List[float]
-    history_dates: List[str]
+TICKER = Query(..., min_length=1, max_length=10)
+MODEL = Query(config.DEFAULT_MODEL)
+DAYS = Query(config.HISTORY_DAYS, ge=5, le=720)
 
 
-class HealthResponse(BaseModel):
-    status: str
-    models: List[str]
+@app.get("/health")
+def health():
+    return {"status": "ok", "models": available_models()}
 
 
-class ExplainResponse(BaseModel):
-    ticker: str
-    model: str
-    prediction: float
-    base_value: float
-    shap_values: dict
+@app.get("/history")
+def history(ticker: str = TICKER, days: int = DAYS):
+    return inference.get_history(ticker, days)
 
 
-@lru_cache(maxsize=1)
-def _service_singleton(_cache_key: int = 0) -> PredictionService:
-    cfg = load_config()
-    return PredictionService(cfg, MarketDataRepository(cfg.data))
+@app.get("/predict")
+def predict(ticker: str = TICKER, model: str = MODEL, days: int = DAYS):
+    check_model(model)
+    return inference.predict(ticker, model, days)
 
 
-def create_app(config: AppConfig | None = None) -> FastAPI:
-    cfg = config or load_config()
-    configure_logging(cfg.service.log_level)
-    app = FastAPI(title="StockVision API", version="0.2.0")
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["GET", "OPTIONS"],
-        allow_headers=["*"],
-    )
-
-    service = _service_singleton()
-
-    @app.get("/health", response_model=HealthResponse)
-    def health() -> HealthResponse:
-        return HealthResponse(status="ok", models=available_models())
-
-    @app.get("/history", response_model=HistoryResponse)
-    def history(
-        ticker: str = Query(..., min_length=1, max_length=10),
-        days: int = Query(60, ge=5, le=720),
-    ) -> HistoryResponse:
-        try:
-            payload = service.history(ticker, history_size=days)
-        except DataFetchError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return HistoryResponse(**payload)
-
-    triton_client = TritonInferenceClient()
-
-    @app.get("/predict", response_model=PredictionResponse)
-    def predict(
-        ticker: str = Query(..., min_length=1, max_length=10),
-        model: str = Query(default=cfg.service.default_model),
-        days: int = Query(60, ge=5, le=720),
-    ) -> PredictionResponse:
-        if model not in available_models():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown model '{model}'. Available: {available_models()}",
-            )
-        try:
-            result = service.predict(ticker, model, history_size=days)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except DataFetchError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return PredictionResponse(
-            ticker=result.ticker,
-            model=result.model,
-            prediction=result.prediction,
-            last_close=result.last_close,
-            history=result.history,
-            history_dates=result.history_dates,
-        )
-
-    @app.get("/explain", response_model=ExplainResponse)
-    def explain(
-        ticker: str = Query(..., min_length=1, max_length=10),
-        model: str = Query(default=cfg.service.default_model),
-    ) -> ExplainResponse:
-        if model not in available_models():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown model '{model}'. Available: {available_models()}",
-            )
-        try:
-            from explainer import StockVisionExplainer
-        except ImportError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        try:
-            result = StockVisionExplainer(service).explain(ticker, model)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except DataFetchError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return ExplainResponse(**result.to_dict())
-
-    @app.get("/predict/triton", response_model=PredictionResponse)
-    def predict_triton(
-        ticker: str = Query(..., min_length=1, max_length=10),
-        model: str = Query(default=cfg.service.default_model),
-        days: int = Query(60, ge=5, le=720),
-    ) -> PredictionResponse:
-        if model not in available_models():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown model '{model}'. Available: {available_models()}",
-            )
-        try:
-            result = triton_client.predict(service, ticker, model, history_size=days)
-        except TritonUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except DataFetchError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return PredictionResponse(**result)
-
-    return app
+@app.get("/predict/triton")
+def predict_via_triton(ticker: str = TICKER, model: str = MODEL, days: int = DAYS):
+    check_model(model)
+    return triton.predict(ticker, model, days)
 
 
-app = create_app()
+@app.get("/explain")
+def explain(ticker: str = TICKER, model: str = MODEL):
+    check_model(model)
+    from .explain import explain as run_explain
+
+    return run_explain(ticker, model)
+
+
+def check_model(name):
+    if name not in available_models():
+        raise HTTPException(400, f"Unknown model '{name}'. Available: {available_models()}")
+
+
+# One handler per failure mode, instead of the same try/except in every route.
+def _error(status, exc):
+    return JSONResponse(status_code=status, content={"detail": str(exc)})
+
+
+@app.exception_handler(FileNotFoundError)
+def handle_untrained_model(request, exc):
+    return _error(404, exc)
+
+
+@app.exception_handler(DataFetchError)
+def handle_bad_ticker(request, exc):
+    return _error(502, exc)
+
+
+@app.exception_handler(triton.TritonUnavailable)
+def handle_triton_down(request, exc):
+    return _error(503, exc)

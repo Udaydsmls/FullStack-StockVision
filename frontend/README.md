@@ -1,38 +1,44 @@
-# StockVision Frontend
+# StockVision frontend
 
-React (CRA) UI for the StockVision API. Works with either the Python or C++
-backend.
+React (Create React App) + Tailwind UI. The backend row at the top of the page
+switches between the FastAPI, C++ and Triton backends at runtime — they all
+answer the same REST contract, so only the base URL changes.
 
 ## Local development
 
 ```bash
 cd frontend
-cp .env.example .env       # adjust REACT_APP_API_URL if needed
+cp .env.example .env
 npm install
 npm start
 ```
 
-By default the UI calls `http://localhost:8000` (the FastAPI service). Set
-`REACT_APP_API_URL=http://localhost:8080` in `.env` to point at the C++ server
-instead.
+`.env` holds one URL per backend:
+
+```
+REACT_APP_FASTAPI_URL=http://localhost:8000
+REACT_APP_CPP_URL=http://localhost:8080
+REACT_APP_TRITON_URL=http://localhost:8000
+```
 
 ## Layout
 
 ```
 frontend/src
-├── App.jsx                    # Top-level orchestrator
+├── App.jsx                    # state and data fetching
 ├── components/
-│   ├── Header.jsx
-│   ├── TickerForm.jsx
-│   ├── PredictionPanel.jsx
-│   ├── PriceChart.jsx
+│   ├── Header.jsx             # title + backend health dot
+│   ├── Switcher.jsx           # backend picker and forecast/explain tabs
+│   ├── TickerForm.jsx         # ticker input, model dropdown, submit
+│   ├── PredictionPanel.jsx    # last close, prediction, implied move
+│   ├── PriceChart.jsx         # history line + forecast point
+│   ├── ExplainChart.jsx       # SHAP feature bars
 │   └── ErrorBanner.jsx
-├── hooks/
-│   ├── usePrediction.js       # Prediction request lifecycle
-│   └── useModels.js           # Health check + model discovery
-├── services/api.js            # Typed-ish API client
-└── utils/format.js            # Currency / percentage helpers
+├── services/api.js            # backend list + fetch helpers
+└── utils/format.js            # currency / percentage helpers
 ```
 
-The app discovers the available model architectures from `GET /health` so any
-new model added on the backend appears automatically in the dropdown.
+The model dropdown is filled from `GET /health`, so an architecture added on
+the backend shows up here without a frontend change. The C++ server and Triton
+only serve the seven ONNX architectures; Prophet and AutoARIMA are FastAPI
+only, as are SHAP explanations.

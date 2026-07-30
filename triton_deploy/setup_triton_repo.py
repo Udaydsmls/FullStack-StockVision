@@ -1,21 +1,16 @@
-"""Lay out the Triton model_repository from ONNX files in ingest_train/artifacts."""
-
-from __future__ import annotations
+"""Copy the exported ONNX models into the folder layout Triton expects."""
 
 import argparse
 import json
-import os
 import shutil
-import sys
 from pathlib import Path
-
 
 CONFIG_TEMPLATE = """name: "{name}"
 backend: "onnxruntime"
 max_batch_size: 32
 input [
   {{
-    name: "input"
+    name: "{input_name}"
     data_type: TYPE_FP32
     dims: [ {window}, {num_features} ]
   }}
@@ -36,68 +31,51 @@ instance_group [
 """
 
 
-def _read_metadata(meta_path: Path) -> dict:
-    return json.loads(meta_path.read_text())
+def build_repository(artifacts_dir, output_dir):
+    """Walk artifacts/<TICKER>/<MODEL>/ and write output/<ticker>_<model>/."""
+    deployed = []
+    for metadata_path in sorted(artifacts_dir.glob("*/*/metadata.json")):
+        model_dir = metadata_path.parent
+        onnx_path = model_dir / "model.onnx"
+        if not onnx_path.exists():
+            continue  # Prophet and AutoARIMA have no ONNX graph to serve
 
+        metadata = json.loads(metadata_path.read_text())
+        name = f"{model_dir.parent.name}_{model_dir.name}".lower()
 
-def _symlink_or_copy(src: Path, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists() or dst.is_symlink():
-        dst.unlink()
-    try:
-        os.symlink(src, dst)
-    except (OSError, NotImplementedError):
-        shutil.copyfile(src, dst)
-
-
-def build_repo(artifacts: Path, output: Path) -> list[str]:
-    if not artifacts.exists():
-        raise SystemExit(f"Artifacts directory not found: {artifacts}")
-    output.mkdir(parents=True, exist_ok=True)
-
-    deployed: list[str] = []
-    for ticker_dir in sorted(artifacts.iterdir()):
-        if not ticker_dir.is_dir():
-            continue
-        for model_dir in sorted(ticker_dir.iterdir()):
-            if not model_dir.is_dir():
-                continue
-            onnx_path = model_dir / "model.onnx"
-            meta_path = model_dir / "metadata.json"
-            if not onnx_path.exists() or not meta_path.exists():
-                continue
-            metadata = _read_metadata(meta_path)
-            name = f"{ticker_dir.name}_{model_dir.name}".lower()
-            window = int(metadata["window"])
-            num_features = int(metadata["num_features"])
-            output_name = "output"
-
-            target_dir = output / name / "1"
-            _symlink_or_copy(onnx_path.resolve(), target_dir / "model.onnx")
-            (output / name / "config.pbtxt").write_text(
-                CONFIG_TEMPLATE.format(
-                    name=name, window=window, num_features=num_features, output_name=output_name
-                )
+        version_dir = output_dir / name / "1"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(onnx_path, version_dir / "model.onnx")
+        (output_dir / name / "config.pbtxt").write_text(
+            CONFIG_TEMPLATE.format(
+                name=name,
+                window=metadata["window"],
+                num_features=metadata["num_features"],
+                input_name=metadata["input_name"],
+                output_name=metadata["output_name"],
             )
-            deployed.append(name)
+        )
+        deployed.append(name)
     return deployed
 
 
-def main(argv: list[str] | None = None) -> int:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", type=Path, default=Path("../ingest_train/artifacts"))
     parser.add_argument("--output", type=Path, default=Path("model_repository"))
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
 
-    deployed = build_repo(args.artifacts, args.output)
+    if not args.artifacts.exists():
+        raise SystemExit(f"Artifacts directory not found: {args.artifacts}")
+
+    deployed = build_repository(args.artifacts, args.output)
     if not deployed:
-        print("No ONNX models found. Run `stockvision train` first.", file=sys.stderr)
-        return 1
-    print("Deployed:")
+        raise SystemExit("No ONNX models found. Run `stockvision train` first.")
+
+    print(f"Deployed {len(deployed)} models to {args.output}:")
     for name in deployed:
         print(f"  - {name}")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

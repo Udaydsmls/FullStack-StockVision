@@ -1,28 +1,29 @@
 #include <cassert>
 #include <cmath>
-#include <cstdio>
 #include <iostream>
 
 #include "csv_loader.h"
-#include "feature_engineer.h"
+#include "features.h"
 
 int main() {
-    stockvision::OhlcvFrame frame;
-    frame.dates = {"d1", "d2", "d3", "d4", "d5"};
-    frame.columns["open"]   = {10, 11, 12, 13, 14};
-    frame.columns["high"]   = {11, 12, 13, 14, 15};
-    frame.columns["low"]    = {9, 10, 11, 12, 13};
-    frame.columns["close"]  = {10, 11, 12, 13, 14};
-    frame.columns["volume"] = {1000, 1100, 1200, 1300, 1400};
+    stockvision::PriceTable prices;
+    prices.dates = {"d1", "d2", "d3", "d4", "d5"};
+    prices.open = {10, 11, 12, 13, 14};
+    prices.high = {11, 12, 13, 14, 15};
+    prices.low = {9, 10, 11, 12, 13};
+    prices.close = {10, 11, 12, 13, 14};
+    prices.volume = {1000, 1100, 1200, 1300, 1400};
 
-    auto matrix = stockvision::build_feature_matrix(frame);
-    assert(matrix.num_rows() == 5);
-    assert(matrix.num_cols() == 17);
-    for (const auto& row : matrix.rows) {
-        for (const float v : row) {
-            assert(!std::isnan(v));
-        }
+    const auto features = stockvision::build_features(prices);
+    assert(features.rows.size() == 5);
+    assert(features.names.size() == 17);
+
+    // A model fed a NaN returns a NaN, so the feature builder must never produce one.
+    for (const auto& row : features.rows) {
+        assert(row.size() == 17);
+        for (const float value : row) assert(!std::isnan(value));
     }
-    std::cout << "feature_engineer OK\n";
+
+    std::cout << "features OK\n";
     return 0;
 }

@@ -1,74 +1,63 @@
-from __future__ import annotations
+"""Third serving backend: run the same ONNX graph inside Triton Inference Server.
 
-import os
-from typing import Any
+The request and response look identical to /predict; only the place the graph
+runs changes.
+"""
 
-import numpy as np
+import logging
 
-from .features import build_feature_frame
-from .inference import PredictionService
+from . import config
+from .data import get_prices
+from .dataset import inverse_transform_target
+from .inference import build_window, get_history, load_model
+
+log = logging.getLogger(__name__)
 
 
 class TritonUnavailable(RuntimeError):
-    pass
+    """Raised when Triton is unreachable or tritonclient is not installed."""
 
 
-class TritonInferenceClient:
-    """Thin wrapper that talks to a running Triton server using tritonclient."""
+def triton_model_name(ticker, model_name):
+    """Triton names models after their folder, e.g. aapl_lstm."""
+    return f"{ticker}_{model_name}".lower()
 
-    def __init__(self, url: str | None = None) -> None:
-        self.url = url or os.environ.get("TRITON_URL", "localhost:8000")
 
-    @staticmethod
-    def _model_name(ticker: str, model: str) -> str:
-        return f"{ticker.upper()}_{model}".lower()
+def predict(ticker, model_name, days=config.HISTORY_DAYS):
+    try:
+        import tritonclient.http as triton_http
+        from tritonclient.utils import np_to_triton_dtype
+    except ImportError as exc:
+        raise TritonUnavailable("tritonclient is not installed") from exc
 
-    def predict(
-        self,
-        service: PredictionService,
-        ticker: str,
-        model: str,
-        *,
-        history_size: int = 60,
-    ) -> dict[str, Any]:
-        try:
-            import tritonclient.http as httpclient
-            from tritonclient.utils import np_to_triton_dtype
-        except ImportError as exc:
-            raise TritonUnavailable("tritonclient is not installed") from exc
+    # The scalers and tensor names still come from the local artifacts.
+    model = load_model(ticker, model_name)
+    if model["backend"] != "keras":
+        raise TritonUnavailable(f"'{model_name}' is not an ONNX model, so Triton cannot serve it")
 
-        bundle = service._load_bundle(ticker, model)  # noqa: SLF001 (reuses metadata + scalers)
-        df = service._repo.get(ticker)
-        feature_frame = build_feature_frame(df)[list(bundle.feature_names)]
-        tensor = feature_frame.values[-bundle.window:].astype(np.float32)
-        scaled = bundle.feature_scaler.transform(tensor).astype(np.float32)[None, :, :]
+    prices = get_prices(ticker)
+    window = build_window(model, prices, ticker)
 
-        client = httpclient.InferenceServerClient(url=self.url)
-        infer_input = httpclient.InferInput("input", scaled.shape, np_to_triton_dtype(scaled.dtype))
-        infer_input.set_data_from_numpy(scaled)
-        request_output = httpclient.InferRequestedOutput("output")
+    request = triton_http.InferInput(
+        model["input_name"], window.shape, np_to_triton_dtype(window.dtype)
+    )
+    request.set_data_from_numpy(window)
 
-        try:
-            response = client.infer(
-                model_name=self._model_name(ticker, model),
-                inputs=[infer_input],
-                outputs=[request_output],
-            )
-        except Exception as exc:
-            raise TritonUnavailable(f"Triton request failed: {exc}") from exc
+    try:
+        client = triton_http.InferenceServerClient(url=config.TRITON_URL)
+        response = client.infer(
+            model_name=triton_model_name(ticker, model_name),
+            inputs=[request],
+            outputs=[triton_http.InferRequestedOutput(model["output_name"])],
+        )
+    except Exception as exc:
+        raise TritonUnavailable(f"Triton request failed: {exc}") from exc
 
-        scaled_pred = response.as_numpy("output")
-        if scaled_pred is None or scaled_pred.size == 0:
-            raise TritonUnavailable("Triton returned an empty output tensor")
-        prediction = float(scaled_pred.ravel()[0] * bundle.target_scaler.scale_[0]
-                           + bundle.target_scaler.mean_[0])
+    scaled = response.as_numpy(model["output_name"])
+    if scaled is None or scaled.size == 0:
+        raise TritonUnavailable("Triton returned an empty output tensor")
 
-        tail = df.tail(history_size)
-        return {
-            "ticker": ticker.upper(),
-            "model": model,
-            "prediction": prediction,
-            "last_close": float(df["Close"].iloc[-1]),
-            "history": [float(v) for v in tail["Close"].tolist()],
-            "history_dates": [str(d)[:10] for d in tail.get("Date", tail.index).tolist()],
-        }
+    result = get_history(ticker, days, prices)
+    result["model"] = model_name
+    result["prediction"] = inverse_transform_target(scaled.ravel()[0], model["target_scaler"])
+    return result

@@ -1,42 +1,32 @@
-from __future__ import annotations
-
-from dataclasses import asdict, dataclass
+"""Accuracy metrics for a set of forecasts."""
 
 import numpy as np
 
 
-@dataclass(frozen=True)
-class ForecastMetrics:
-    mae: float
-    rmse: float
-    mape: float
-    directional_accuracy: float
-    n: int
-
-    def to_dict(self) -> dict[str, float | int]:
-        return asdict(self)
-
-
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> ForecastMetrics:
-    y_true = np.asarray(y_true, dtype=np.float64).ravel()
-    y_pred = np.asarray(y_pred, dtype=np.float64).ravel()
+def compute_metrics(y_true, y_pred):
+    """Return MAE, RMSE, MAPE and directional accuracy as a plain dict."""
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    y_pred = np.asarray(y_pred, dtype=float).ravel()
     if y_true.shape != y_pred.shape:
         raise ValueError(f"Shape mismatch: {y_true.shape} vs {y_pred.shape}")
-    n = y_true.size
-    if n == 0:
-        return ForecastMetrics(0.0, 0.0, 0.0, 0.0, 0)
+    if y_true.size == 0:
+        return {"mae": 0.0, "rmse": 0.0, "mape": 0.0, "directional_accuracy": 0.0, "n": 0}
 
     error = y_true - y_pred
-    mae = float(np.mean(np.abs(error)))
-    rmse = float(np.sqrt(np.mean(error ** 2)))
-    denom = np.where(np.abs(y_true) < 1e-9, np.nan, y_true)
-    mape = float(np.nanmean(np.abs(error / denom)) * 100)
+    # Blank out zero targets so the percentage error never divides by zero.
+    denominator = np.where(np.abs(y_true) < 1e-9, np.nan, y_true)
 
-    if n > 1:
-        true_dir = np.sign(np.diff(y_true))
-        pred_dir = np.sign(np.diff(y_pred))
-        directional = float(np.mean(true_dir == pred_dir))
-    else:
-        directional = 0.0
+    # How often we got the up/down move right, which matters more than the exact price.
+    directional_accuracy = 0.0
+    if y_true.size > 1:
+        directional_accuracy = float(
+            np.mean(np.sign(np.diff(y_true)) == np.sign(np.diff(y_pred)))
+        )
 
-    return ForecastMetrics(mae=mae, rmse=rmse, mape=mape, directional_accuracy=directional, n=n)
+    return {
+        "mae": float(np.mean(np.abs(error))),
+        "rmse": float(np.sqrt(np.mean(error**2))),
+        "mape": float(np.nanmean(np.abs(error / denominator)) * 100),
+        "directional_accuracy": directional_accuracy,
+        "n": int(y_true.size),
+    }

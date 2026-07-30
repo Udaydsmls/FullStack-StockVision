@@ -1,15 +1,17 @@
-from __future__ import annotations
+"""Turn a feature frame into scaled sliding windows for supervised training."""
 
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
-import pandas as pd
 from sklearn.preprocessing import StandardScaler
+
+from . import config
 
 
 @dataclass
-class WindowedDataset:
+class Dataset:
+    """Train/validation/test windows plus the scalers used to build them."""
+
     X_train: np.ndarray
     y_train: np.ndarray
     X_val: np.ndarray
@@ -18,73 +20,71 @@ class WindowedDataset:
     y_test: np.ndarray
     feature_scaler: StandardScaler
     target_scaler: StandardScaler
-    feature_names: tuple[str, ...]
-    target_name: str
+    feature_names: list
     window: int
     horizon: int
 
     @property
-    def num_features(self) -> int:
-        return self.X_train.shape[-1]
+    def num_features(self):
+        return len(self.feature_names)
 
 
-def _make_windows(
-    features: np.ndarray, target: np.ndarray, window: int, horizon: int
-) -> Tuple[np.ndarray, np.ndarray]:
-    if len(features) <= window + horizon - 1:
+def make_windows(features, target, window, horizon):
+    """Slice a 2-D array into inputs of shape (n, window, num_features) and their targets."""
+    count = len(features) - window - horizon + 1
+    if count <= 0:
         raise ValueError(
-            f"Not enough rows ({len(features)}) for window={window}, horizon={horizon}"
+            f"Need more than {window + horizon - 1} rows for window={window}, got {len(features)}"
         )
-    n = len(features) - window - horizon + 1
-    X = np.stack([features[i : i + window] for i in range(n)], axis=0)
-    y = np.array([target[i + window + horizon - 1] for i in range(n)])
+    X = np.stack([features[i : i + window] for i in range(count)])
+    y = np.array([target[i + window + horizon - 1] for i in range(count)])
     return X.astype(np.float32), y.astype(np.float32)
 
 
 def build_dataset(
-    feature_frame: pd.DataFrame,
-    *,
-    target_column: str = "close",
-    window: int = 30,
-    horizon: int = 1,
-    val_split: float = 0.15,
-    test_split: float = 0.10,
-) -> WindowedDataset:
-    if target_column not in feature_frame.columns:
-        raise KeyError(f"Target column '{target_column}' not in feature frame")
-    if val_split < 0 or test_split < 0 or val_split + test_split >= 1.0:
-        raise ValueError("val_split + test_split must be in [0, 1)")
+    frame,
+    target_column="close",
+    window=config.WINDOW,
+    horizon=config.HORIZON,
+    val_split=config.VAL_SPLIT,
+    test_split=config.TEST_SPLIT,
+):
+    """Split chronologically, fit the scalers on the training rows only, then window."""
+    if target_column not in frame.columns:
+        raise KeyError(f"Target column '{target_column}' is not in the feature frame")
 
-    feature_names = tuple(feature_frame.columns)
-    target_idx = feature_names.index(target_column)
+    feature_names = list(frame.columns)
+    target_index = feature_names.index(target_column)
+    values = frame.values.astype(np.float32)
 
-    raw = feature_frame.values.astype(np.float32)
-    n = len(raw)
-    n_test = max(1, int(n * test_split))
-    n_val = max(1, int(n * val_split))
-    n_train = n - n_val - n_test
+    total = len(values)
+    n_test = max(1, int(total * test_split))
+    n_val = max(1, int(total * val_split))
+    n_train = total - n_val - n_test
     if n_train <= window + horizon:
         raise ValueError(
-            f"Training segment too small (n_train={n_train}) for window={window}, horizon={horizon}"
+            f"Not enough rows: {total} total leaves {n_train} for training, "
+            f"which is too few for window={window}"
         )
 
-    train_raw = raw[:n_train]
-    val_raw = raw[n_train - window : n_train + n_val]
-    test_raw = raw[n_train + n_val - window :]
+    # The val/test blocks start `window` rows early so their first window is complete.
+    train = values[:n_train]
+    val = values[n_train - window : n_train + n_val]
+    test = values[n_train + n_val - window :]
 
-    feature_scaler = StandardScaler().fit(train_raw)
-    target_scaler = StandardScaler().fit(train_raw[:, target_idx : target_idx + 1])
+    feature_scaler = StandardScaler().fit(train)
+    target_scaler = StandardScaler().fit(train[:, [target_index]])
 
-    def _scale(block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def scale_and_window(block):
         scaled = feature_scaler.transform(block)
-        target = target_scaler.transform(block[:, target_idx : target_idx + 1]).ravel()
-        return _make_windows(scaled, target, window, horizon)
+        target = target_scaler.transform(block[:, [target_index]]).ravel()
+        return make_windows(scaled, target, window, horizon)
 
-    X_train, y_train = _scale(train_raw)
-    X_val, y_val = _scale(val_raw)
-    X_test, y_test = _scale(test_raw)
+    X_train, y_train = scale_and_window(train)
+    X_val, y_val = scale_and_window(val)
+    X_test, y_test = scale_and_window(test)
 
-    return WindowedDataset(
+    return Dataset(
         X_train=X_train,
         y_train=y_train,
         X_val=X_val,
@@ -94,24 +94,19 @@ def build_dataset(
         feature_scaler=feature_scaler,
         target_scaler=target_scaler,
         feature_names=feature_names,
-        target_name=target_column,
         window=window,
         horizon=horizon,
     )
 
 
-def transform_window(
-    feature_frame: pd.DataFrame,
-    feature_scaler: StandardScaler,
-    window: int,
-) -> np.ndarray:
-    if len(feature_frame) < window:
-        raise ValueError(f"Need at least {window} rows, got {len(feature_frame)}")
-    block = feature_frame.values[-window:].astype(np.float32)
-    scaled = feature_scaler.transform(block).astype(np.float32)
-    return scaled[None, :, :]
+def transform_window(frame, feature_scaler, window):
+    """Scale the most recent `window` rows into the (1, window, features) tensor a model wants."""
+    if len(frame) < window:
+        raise ValueError(f"Need at least {window} rows, got {len(frame)}")
+    scaled = feature_scaler.transform(frame.values[-window:])
+    return scaled.astype(np.float32)[None, :, :]
 
 
-def inverse_transform_target(value: float, target_scaler: StandardScaler) -> float:
-    arr = np.asarray([[value]], dtype=np.float32)
-    return float(target_scaler.inverse_transform(arr)[0, 0])
+def inverse_transform_target(value, target_scaler):
+    """Convert a scaled model output back into a dollar price."""
+    return float(target_scaler.inverse_transform([[value]])[0][0])

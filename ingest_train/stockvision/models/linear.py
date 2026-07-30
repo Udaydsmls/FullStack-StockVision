@@ -1,24 +1,19 @@
-from __future__ import annotations
+"""Flattened linear regression: the baseline every other architecture has to beat."""
 
-from .base import BaseForecastModel, ModelMetadata
-from .registry import register_model
+from .registry import register
 
 
-@register_model("linear")
-class LinearModel(BaseForecastModel):
-    metadata = ModelMetadata(
+def build(window, num_features):
+    import tensorflow as tf
+
+    return tf.keras.Sequential(
+        [
+            tf.keras.layers.Input(shape=(window, num_features), name="input"),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(1, name="output"),
+        ],
         name="linear",
-        description="Flattened linear baseline; useful sanity check and competitive on short horizons.",
     )
 
-    def build(self, window: int, num_features: int):
-        import tensorflow as tf
 
-        return tf.keras.Sequential(
-            [
-                tf.keras.layers.Input(shape=(window, num_features), name="input"),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(1, name="output"),
-            ],
-            name="linear",
-        )
+register("linear", "Flattened linear baseline.", build=build)
